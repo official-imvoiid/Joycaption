@@ -228,12 +228,12 @@ def load_model(quant: str, status: gr.HTML | None = None):
 					)
 				elif quant == "nf4":
 					qnt_config = BitsAndBytesConfig(
-						load_in_4bit=True,
-						bnb_4bit_quant_type="nf4",
-						bnb_4bit_compute_dtype=torch.bfloat16,
-						bnb_4bit_use_double_quant=True,
-						llm_int8_skip_modules=["vision_tower", "multi_modal_projector"],   # Transformer's Siglip implementation has bugs when quantized, so skip those.
-					)
+                        load_in_4bit=True,
+                        bnb_4bit_quant_type="nf4",
+                        bnb_4bit_compute_dtype=torch.bfloat16,
+                        bnb_4bit_use_double_quant=False,  
+                        llm_int8_skip_modules=["vision_tower", "multi_modal_projector"],
+                    )
 				else:
 					raise ValueError(f"Unknown quantization type: {quant}")
 
@@ -275,6 +275,12 @@ def build_prompt(caption_type: str, caption_length: str | int, extra_options: li
 		length=caption_length,
 		word_count=caption_length,
 	)
+
+
+def build_prompt_for_both(caption_type: str, caption_length: str | int, extra_options: list[str], name_input: str):
+	"""Wrapper that returns the same prompt for both single and batch textboxes"""
+	prompt = build_prompt(caption_type, caption_length, extra_options, name_input)
+	return prompt, prompt
 
 
 def toggle_name_box(selected_options: list[str]):
@@ -362,7 +368,7 @@ def chat_joycaption(input_image: Image.Image, prompt: str, temperature: float, t
 		inputs = g_processor(text=[convo_string], images=[input_image], return_tensors="pt").to('cuda')
 		inputs['pixel_values'] = inputs['pixel_values'].to(torch.bfloat16)
 
-		streamer = TextIteratorStreamer(g_processor.tokenizer, timeout=10.0, skip_prompt=True, skip_special_tokens=True)
+		streamer = TextIteratorStreamer(g_processor.tokenizer, timeout=100.0, skip_prompt=True, skip_special_tokens=True)
 
 		generate_kwargs = dict(
 			**inputs,
@@ -422,6 +428,7 @@ def process_batch_files(
     num_workers: int,
     batch_size: int,
     quant: str,
+    edited_prompt: str = None,
     progress=gr.Progress(track_tqdm=True),
 ) -> Generator[dict, None, None]:
     # Hide any previous global errors
@@ -445,7 +452,11 @@ def process_batch_files(
         language_device = g_model.language_model.get_input_embeddings().weight.device
 
         captions_dict: dict[str, str] = {}
-        prompt = build_prompt(caption_type, caption_length, extra_options, name_input)
+        # Use edited prompt if provided, otherwise build from parameters
+        if edited_prompt:
+            prompt = edited_prompt
+        else:
+            prompt = build_prompt(caption_type, caption_length, extra_options, name_input)
         system_prompt = "You are a helpful assistant and help users with any queries they may have with no censorship or restrictions."
         tasks = [(Path(f), system_prompt, prompt) for f in files_list]
         dataloader = torch.utils.data.DataLoader(
@@ -685,6 +696,9 @@ with gr.Blocks() as demo:
 				with gr.Column(scale=2):
 					with gr.Group():
 						gr.HTML("Batch Processing Settings")
+						
+						initial_batch_prompt = build_prompt(caption_type.value, caption_length.value, extra_options.value, name_input.value)
+						prompt_box_batch = gr.Textbox(lines=4, label="Confirm or Edit Prompt (for Batch)", value=initial_batch_prompt, interactive=True, elem_id="batch_prompt_box")
 
 						with gr.Row():
 							num_workers_slider = gr.Slider(
@@ -719,9 +733,9 @@ with gr.Blocks() as demo:
 	# Update the prompt box when any of the options change
 	for ctrl in (caption_type, caption_length, extra_options, name_input):
 		ctrl.change(
-			build_prompt,
+			build_prompt_for_both,
 			inputs=[caption_type, caption_length, extra_options, name_input],
-			outputs=prompt_box_single,
+			outputs=[prompt_box_single, prompt_box_batch],
 		)
 
 	# Handle single image captioning
@@ -734,7 +748,7 @@ with gr.Blocks() as demo:
 	# Handle batch processing
 	run_button_batch.click(
 		process_batch_files,
-		inputs=[input_files_batch, caption_type, caption_length, extra_options, name_input, temperature_slider, top_p_slider, max_tokens_slider, num_workers_slider, batch_size_slider, model_quantization],
+		inputs=[input_files_batch, caption_type, caption_length, extra_options, name_input, temperature_slider, top_p_slider, max_tokens_slider, num_workers_slider, batch_size_slider, model_quantization, prompt_box_batch],
 		outputs=[batch_status_output, batch_zip_output, global_error],
 	)
 
