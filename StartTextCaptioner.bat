@@ -18,8 +18,18 @@ call "%CondaBat%" activate textcaption || (
     exit /b 1
 )
 
-:: Run GUI
-python ImageCaption.py || (
-    echo Python script failed to run.
+:: Select mode
+echo.
+echo  [1]  ImageCaption        (2-4k images or less)
+echo  [2]  Continuous Caption  (large datasets)
+echo.
+set /p "choice=  Select mode [1 or 2]: "
+
+if "%choice%"=="1" (
+    python ImageCaption.py || ( echo Python script failed to run. & exit /b 1 )
+) else if "%choice%"=="2" (
+    python Continous_ImageCaption.py || ( echo Python script failed to run. & exit /b 1 )
+) else (
+    echo Invalid choice.
     exit /b 1
 )
